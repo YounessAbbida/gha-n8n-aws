@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up n8n (Postgres dump + data directory) to S3
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/n8n/scripts/backup.sh

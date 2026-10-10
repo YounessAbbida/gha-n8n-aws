@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+aws_region   = "eu-west-3"
+domain_name  = "n8n.example.com"
+acme_email   = "ops@example.com"
+budget_email = "ops@example.com"
+
+# Optional: create the DNS record in an existing Route 53 hosted zone.
+# route53_zone_id = "Z0123456789ABCDEFGHIJ"

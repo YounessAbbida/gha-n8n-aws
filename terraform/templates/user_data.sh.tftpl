@@ -1,0 +1,68 @@
+#!/bin/bash
+# First-boot bootstrap, rendered by Terraform (terraform/ec2.tf). Runs once.
+# Log: /var/log/n8n-bootstrap.log
+set -euo pipefail
+exec > >(tee -a /var/log/n8n-bootstrap.log) 2>&1
+
+APP_DIR=/opt/n8n
+REGION="${aws_region}"
+PARAM_PREFIX="${param_prefix}"
+
+echo "installing docker"
+dnf install -y docker
+systemctl enable --now docker
+
+echo "installing docker compose ${compose_version} (checksum verified)"
+PLUGIN=/usr/local/lib/docker/cli-plugins/docker-compose
+mkdir -p "$(dirname "$PLUGIN")"
+curl -fsSL -o "$PLUGIN" "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-aarch64"
+echo "${compose_sha256}  $PLUGIN" | sha256sum --check -
+chmod 0755 "$PLUGIN"
+
+echo "writing stack files to $APP_DIR"
+install -d -m 0750 "$APP_DIR" "$APP_DIR/scripts" "$APP_DIR/systemd"
+install -d -m 0700 -o 1000 -g 1000 "$APP_DIR/data/n8n"
+%{ for path, content in stack_files ~}
+echo "${content}" | base64 -d > "$APP_DIR/${path}"
+%{ endfor ~}
+chmod 0750 "$APP_DIR"/scripts/*.sh
+
+# Secrets are created once and kept in SSM Parameter Store (SecureString), not
+# in Terraform state. A rebuilt instance reads the same values, so restored
+# credentials still decrypt.
+get_or_create_secret() {
+  local name=$1 value
+  if ! value=$(aws ssm get-parameter --region "$REGION" --name "$PARAM_PREFIX/$name" \
+      --with-decryption --query Parameter.Value --output text 2>/dev/null); then
+    value=$(openssl rand -hex 32)
+    aws ssm put-parameter --region "$REGION" --name "$PARAM_PREFIX/$name" \
+      --type SecureString --value "$value" >/dev/null
+  fi
+  printf '%s' "$value"
+}
+
+POSTGRES_PASSWORD=$(get_or_create_secret postgres-password)
+N8N_ENCRYPTION_KEY=$(get_or_create_secret n8n-encryption-key)
+
+umask 077
+cat > "$APP_DIR/.env" <<ENV
+N8N_VERSION=${n8n_version}
+N8N_HOST=${domain_name}
+ACME_EMAIL=${acme_email}
+TIMEZONE=${timezone}
+AWS_REGION=${aws_region}
+BACKUP_BUCKET=${backup_bucket}
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+N8N_ENCRYPTION_KEY=$N8N_ENCRYPTION_KEY
+ENV
+umask 022
+
+echo "starting n8n"
+docker compose --project-directory "$APP_DIR" up -d
+
+echo "enabling nightly backup"
+install -m 0644 "$APP_DIR/systemd/n8n-backup.service" "$APP_DIR/systemd/n8n-backup.timer" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now n8n-backup.timer
+
+echo "bootstrap complete"

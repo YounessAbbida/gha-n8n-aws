@@ -1,0 +1,115 @@
+name: ci
+
+# Static checks only. This workflow has no AWS credentials and deploys nothing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Explicit bash adds -o pipefail, so a failing command in a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate
+        run: |
+          terraform -chdir=terraform init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=terraform validate
+
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: v0.64.0
+
+      - name: tflint
+        env:
+          # Used by `tflint --init` to download the AWS ruleset without hitting rate limits.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tflint --init --config "${GITHUB_WORKSPACE}/.tflint.hcl"
+          tflint --chdir=terraform --config "${GITHUB_WORKSPACE}/.tflint.hcl"
+
+  checkov:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Every skipped check is justified inline next to the resource it applies to.
+      - name: checkov
+        run: |
+          pip install checkov==3.3.26
+          checkov --directory . --quiet --compact
+
+  stack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # shellcheck is preinstalled on GitHub's Ubuntu runners.
+      - name: shellcheck
+        run: shellcheck --external-sources stack/scripts/*.sh
+
+      - name: docker compose config
+        run: |
+          cp stack/.env.example stack/.env
+          docker compose --project-directory stack config --quiet
+
+      - name: Caddyfile validate
+        run: |
+          docker run --rm \
+            -e N8N_HOST=n8n.example.com -e ACME_EMAIL=ops@example.com \
+            -v "${GITHUB_WORKSPACE}/stack/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.7-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+  actionlint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.14"
+          cache: false
+
+      # Installed through the Go module proxy, so the download is verified against the Go checksum database.
+      - name: actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
