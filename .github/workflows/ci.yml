@@ -79,9 +79,16 @@ jobs:
         with:
           persist-credentials: false
 
-      # shellcheck is preinstalled on GitHub's Ubuntu runners.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Pinned, instead of the runner's preinstalled version.
       - name: shellcheck
-        run: shellcheck --external-sources stack/scripts/*.sh
+        run: |
+          pip install shellcheck-py==0.11.0.1
+          shellcheck --version
+          shellcheck --external-sources stack/scripts/*.sh
 
       - name: docker compose config
         run: |
