@@ -2,10 +2,11 @@
 # Shared helpers for backup.sh, restore.sh and upgrade.sh. Sourced, not run.
 
 APP_DIR=/opt/n8n
+# shellcheck disable=SC2034 # used by restore.sh
 BACKUP_ID_RE='^[0-9]{8}T[0-9]{6}Z$'
 
 load_env() {
-  cd "$APP_DIR"
+  cd "$APP_DIR" || return 1
   set -a
   # shellcheck source=/dev/null
   . "$APP_DIR/.env"

@@ -4,7 +4,7 @@
 # Prints the backup id on the last line of output.
 set -euo pipefail
 
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname "$0")/lib.sh"
 load_env
 
